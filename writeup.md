@@ -1,51 +1,50 @@
+# Initial data validation
 
 Test table:
-- ads channel have some NaN and other. we may be able to assume that the 'NaN' users came directly to the site (source = direct) while the 'Other' users came from other ad locations.
+- `ads channel` have some `NaN` and `Other` values. We may be able to assume that the `NaN` users came directly to the site (`source` = `direct`) while the 'Other' users came from other paid ad media.
 
-User table: data is clean with no missing, empty or unexpected values.
+  ```
+  <class 'pandas.core.frame.DataFrame'>
+  RangeIndex: 453321 entries, 0 to 453320
+  Data columns (total 9 columns):
+  user_id             453321 non-null int64
+  date                453321 non-null object
+  source              453321 non-null object
+  device              453321 non-null object
+  browser_language    453321 non-null object
+  ads_channel         181877 non-null object
+  browser             453321 non-null object
+  conversion          453321 non-null int64
+  test                453321 non-null int64
+  dtypes: int64(3), object(6)
+  memory usage: 31.1+ MB
+  ```
 
-We have 453,321 user_ids in the test table but only 452,867 in the user table. So 454 users don't have profiles. We would need to exclude them from the data set.
+User table:
+- data is clean with no  empty or unexpected values.
+- however, we have 453,321 user_ids in the `test` dataset but only 452,867 user_ids in the `user` dataset. So 454 users do not have profiles. We would need to exclude them from the data set.
 
-test_table:
+  ```
+  <class 'pandas.core.frame.DataFrame'>
+  RangeIndex: 452867 entries, 0 to 452866
+  Data columns (total 4 columns):
+  user_id    452867 non-null int64
+  sex        452867 non-null object
+  age        452867 non-null int64
+  country    452867 non-null object
+  dtypes: int64(2), object(2)
+  memory usage: 13.8+ MB
+  ```
+# Experiment design consideration
 
-```
-<class 'pandas.core.frame.DataFrame'>
-RangeIndex: 453321 entries, 0 to 453320
-Data columns (total 9 columns):
-user_id             453321 non-null int64
-date                453321 non-null object
-source              453321 non-null object
-device              453321 non-null object
-browser_language    453321 non-null object
-ads_channel         181877 non-null object
-browser             453321 non-null object
-conversion          453321 non-null int64
-test                453321 non-null int64
-dtypes: int64(3), object(6)
-memory usage: 31.1+ MB
-```
-
-user_table:
-
-```
-<class 'pandas.core.frame.DataFrame'>
-RangeIndex: 452867 entries, 0 to 452866
-Data columns (total 4 columns):
-user_id    452867 non-null int64
-sex        452867 non-null object
-age        452867 non-null int64
-country    452867 non-null object
-dtypes: int64(2), object(2)
-memory usage: 13.8+ MB
-```
-
-
+## Length
 Our tests were run during a 5 day period. This is on the shorter side. We would want to capture at least one full week of the business cycle.
 
 ```
 (Timestamp('2015-11-30 00:00:00'), Timestamp('2015-12-04 00:00:00'))
 ```
 
+## Segmentation
 Browser language might also be an interesting factor to consider. Those using EN or other browser languages might not be affected much by localization.
 
 ```
@@ -55,7 +54,41 @@ tt.browser_language.unique()
 
 To ensure the purity of our test results, we will only take samples where the browser language is 'ES'.
 
-Breakdown by country:
+## Distribution
+
+For unknown reasons, the Argentina and Uruguay websites distribute a disproportionate amount of traffic to the treatment group while every other country is 50:50.
+
+- Argentina:
+<img src="test_date_Argentina.png">
+
+- Uruguay
+<img src="test_date_Uruguay.png">
+
+This would skew the results of the test toward whatever users in the treatment group of these two countries prefer. To avoid this, we need to make sure to have an even distribution across countries. We can sidestep this issue for now by segmenting by country.
+
+# Data Cleaning
+
+We need to exclude the entries in test dataset that do not have corresponding user profiles:
+
+```python
+# get the list of user_ids in tt that do not exist in ut
+no_profile = np.setdiff1d(tt.index.unique(), ut.index.unique())
+
+# exclude user_ids with no profile
+df = pd.concat([tt[~tt.index.isin(no_profile)],ut],axis=1)
+```
+
+In addition, we want to include only test entries where the browser language is 'ES':
+
+```python
+tt = tt[tt.browser_language == 'ES']
+```
+
+# Exploratory data analysis
+
+Since each country has its own localized version, a cross-country analysis would not make much sense. It's better to segment by country and see whether the localized version performs better in each country.
+
+Here is a breakdown of control and treatment conversion rates for each country in our dataset.
 
 |        |   Control | Treatment   |  delta |
 |------------|------|-------|-------------------|
@@ -77,7 +110,7 @@ Breakdown by country:
 | Uruguay     | 0.008427 |  0.010975 | 0.002548 |
 | Venezuela   | 0.050712 |  0.049830 |-0.000882 |
 
-We need to test for statistical significance, but at first glance, the following countries have higher treatment conversion rates in absolute term:
+At first glance, the following countries have higher treatment conversion rates in absolute term, though the differences might not be significant:
 
 - Chile
 - Costa Rica
@@ -88,16 +121,18 @@ We need to test for statistical significance, but at first glance, the following
 - Peru
 - Uruguay
 
+We can also confirm that Spain has a much higher CVR - nearly 3% better - than any other country.
 
-Also for some reason, Argentina and Uruguay distribute a disproportionate amount of traffic to the treatment group  while every other country is 50:50.
+# Hypothesis testing
 
-- Argentina:
-<img src="test_date_Argentina.png">
+We choose a t-test to compare our two samples. Our hypotheses are:
 
-- Uruguay
-<img src="test_date_Uruguay.png">
+- Null: there is no difference in conversion rate. $\mu_1 = \mu_2$
+- Alternate: there is a difference in conversion rate. $\mu_1 \neq \mu_2$
 
-T-test result per country
+We use the standard significance level of $\alpha = 0.5$
+
+Here is the results by country:
 
 | Country     |  t-stat          |  p-value       |
 |-------------|------------------|----------------|
@@ -119,4 +154,8 @@ T-test result per country
 | Uruguay     | -0.442145239446  | 0.658411807723 |
 | Venezuela   | 0.329812303369   | 0.741544374698 |
 
-All tests are insignificant, indicating that localization does not have an effect.
+All tests are have insignificant p-values. Therefore we fail to reject the null hypothesis.
+
+# Conclusion
+
+All tests are insignificant, indicating that localization does not have an effect. The next step could be to fit a model that predicts conversion rate based on existing and interpret that model to determine which features seem to have the most positive effect on conversion. If there is a correlation between that feature and Spain, that would tell us that that feature might be responsible for Spain's performance.
